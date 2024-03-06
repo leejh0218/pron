@@ -1,0 +1,190 @@
+import RPi.GPIO as GPIO
+import time
+import keyboard
+import cv2
+import numpy as np
+
+
+TRIG = 23  
+ECHO = 24  
+LEFT_PWM_PIN = 17  
+RIGHT_PWM_PIN = 18  
+
+
+pwm_freq = 1000  
+pwm_duty_cycle = 50  
+
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(TRIG, GPIO.OUT)
+GPIO.setup(ECHO, GPIO.IN)
+GPIO.setup(LEFT_PWM_PIN, GPIO.OUT)
+GPIO.setup(RIGHT_PWM_PIN, GPIO.OUT)
+
+
+left_pwm = GPIO.PWM(LEFT_PWM_PIN, pwm_freq)
+right_pwm = GPIO.PWM(RIGHT_PWM_PIN, pwm_freq)
+
+left_pwm.start(pwm_duty_cycle)
+right_pwm.start(pwm_duty_cycle)
+red_lower = np.array([0, 100, 100])
+red_upper = np.array([10, 255, 255])
+green_lower = np.array([45, 50, 50])
+green_upper = np.array([75, 255, 255])
+blue_lower = np.array([90, 50, 50])
+blue_upper = np.array([120, 255, 255])
+
+
+def measure_distance():
+    GPIO.output(TRIG, True)
+    time.sleep(0.00001)
+    GPIO.output(TRIG, False)
+
+    pulse_start = time.time()
+    pulse_end = time.time()
+
+    while GPIO.input(ECHO) == 0:
+        pulse_start = time.time()
+
+    while GPIO.input(ECHO) == 1:
+        pulse_end = time.time()
+
+    pulse_duration = pulse_end - pulse_start
+    distance = pulse_duration * 17150  
+    return distance
+
+def set_motor_speed(speed, direction):
+    if direction == 0:
+        
+        left_pwm.ChangeDutyCycle(0)
+        right_pwm.ChangeDutyCycle(0)
+    elif direction == 1:
+        
+        left_pwm.ChangeDutyCycle(speed)
+        right_pwm.ChangeDutyCycle(speed)
+    elif direction == -1:
+        
+        left_pwm.ChangeDutyCycle(speed)
+        right_pwm.ChangeDutyCycle(speed)
+    elif direction == 2:
+        
+        left_pwm.ChangeDutyCycle(0)
+        right_pwm.ChangeDutyCycle(speed)
+    elif direction == -2:
+    
+        left_pwm.ChangeDutyCycle(speed)
+        right_pwm.ChangeDutyCycle(0)
+
+driving_mode = "normal"  
+
+def drive_in_mode():
+    if driving_mode == "normal":
+        if distance < 20:
+            speed = 0
+            direction = 0
+        else:
+            if keyboard.is_pressed('up'):
+                speed = 1
+                direction = 1
+            elif keyboard.is_pressed('down'):
+                speed = 1
+                direction = -1
+            elif keyboard.is_pressed('left'):
+                speed = 1
+                direction = 2
+            elif keyboard.is_pressed('right'):
+                speed = 1
+                direction = -2
+            else:
+                speed = 0
+                direction = 0
+    elif driving_mode == "line_following":
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+            
+            mask_red = cv2.inRange(hsv, red_lower, red_upper)
+            
+            mask_green = cv2.inRange(hsv, green_lower, green_upper)
+            
+            mask_blue = cv2.inRange(hsv, blue_lower, blue_upper)
+
+            contours_red, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours_green, _ = cv2.findContours(mask_green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours_blue, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            for idx in follow_priority:
+                if idx == 0:
+                    contours = contours_red
+                elif idx == 1:
+                    contours = contours_green
+                elif idx == 2:
+                    contours = contours_blue
+
+                if contours:
+                    largest_contour = max(contours, key=cv2.contourArea)
+                    M = cv2.moments(largest_contour)
+
+                    if M["m00"] != 0:
+                        cX = int(M["m10"] / M["m00"])
+                        cY = int(M["m01"] / M["m00"])
+
+                        error = cX - frame.shape[1] / 2
+
+                        
+                        if len(follow_priority) > 1:
+                            if error > 0:
+                                
+                                set_motor_speed(50, 2)
+                            else:
+                            
+                                set_motor_speed(50, -2)
+                        else:
+                            angle = error / 100
+                            set_motor_speed(50, 1)
+        pass
+
+follow_priority = [0, 1, 2] 
+def change_priority(e):
+    global follow_priority
+    key = e.name
+    if key == '1':
+        follow_priority = [0, 1, 2]  
+    elif key == '2':
+        follow_priority = [0, 2, 1]  
+    elif key == '3':
+        follow_priority = [1, 0, 2]  
+    elif key == '4':
+        follow_priority = [1, 2, 0]  
+    elif key == '5':
+        follow_priority = [2, 0, 1]  
+    elif key == '6':
+        follow_priority = [2, 1, 0] 
+keyboard.hook(change_priority)
+cap = cv2.VideoCapture(0)
+try:
+    cap = cv2.VideoCapture(0)
+
+    while True:
+        distance = measure_distance()
+
+        drive_in_mode()  
+
+        if keyboard.is_pressed('p'):
+            driving_mode = "parking"  
+        elif keyboard.is_pressed('c'):
+            driving_mode = "line_following"  
+            change_priority()
+except KeyboardInterrupt:
+    print("Exiting...")
+
+finally:
+    left_pwm.stop()
+    right_pwm.stop()
+    GPIO.cleanup()
+    cap.release()
